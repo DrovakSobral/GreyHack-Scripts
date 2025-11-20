@@ -1,0 +1,65 @@
+// Load the metaxploit lib
+metaxploit = include_lib("/lib/metaxploit.so")
+if metaxploit == null then metaxploit = include_lib("/home/guest")
+
+if metaxploit == null then exit("Metaxploit lib not found!")
+
+// Helper check
+if params.len < 2 or params[0] == "-h" or params[0] == "--help" then
+    print("This is a command that scans the library of the service for a given ip and port for vulnerabilities.")
+    print("Usage: scanlib <TARGET IP> <PORT>")
+    exit
+end if
+
+// Make sure the given ip is valid
+if is_valid_ip(params[0]) == 0 then exit("Invalid IP Address!")
+
+// Make sure the folder to store all files for this script exist
+destination_folder = get_shell.host_computer.File("/home/guest/scanned_libs")
+if destination_folder == null then
+    create_result = get_shell.host_computer.create_folder("/home/guest", "scanned_libs")
+    if typeof(create_result) == "string" then
+        print("There was an error when creating the destination folder for the results of the scanned lib: " + create_result)
+    else
+        destination_folder = get_shell.host_computer.File("/home/guest/scanned_libs")
+    end if
+end if
+
+// Get the NetSession of the ip and port and dump it to get a metaLib obj
+target_netSession_obj = metaxploit.net_use(params[0], params[1].val)
+if target_netSession_obj == null then
+    exit("Failed to get the netSession object of the ip and port!")
+end if
+
+target_metalib = target_netSession_obj.dump_lib
+
+// Check to see if this lib and version hasn't been scanned before
+scanned_libs_list = destination_folder.get_files
+for file in scanned_libs_list
+    if file.path == "/home/guest/scanned_libs/" + target_metalib.lib_name + "_" + target_metalib.version then
+        exit("Target has already been scanned before: " + target_metalib.lib_name + "_" + target_metalib.version)
+    end if
+end for
+
+// Scan the metaLib obj for vulnerabilities
+target_lib_vuln_addresses = metaxploit.scan(target_metalib)
+if target_lib_vuln_addresses == null then exit("Failed to scan the metaLib for vulnerable memory addresses!")
+
+exploits = []
+for mem_add in target_lib_vuln_addresses
+    scan_address_result = metaxploit.scan_address(target_metalib, mem_add)
+    segments = scan_address_result.split("Unsafe check: ")[1:]
+    for segment in segments
+        label_start = segment.indexOf("<b>")
+        label_end = segment.indexOf("</b>")
+        exploits.push(segment[label_start + 3: label_end])
+    end for
+end for
+
+// Save all the info to a file in the guest folder
+create_file_result = get_shell.host_computer.touch("/home/guest/scanned_libs", target_metalib.lib_name + "_" + target_metalib.version)
+if typeof(create_file_result) == string then exit("Error when creating the final file to store the results of the scan: " + result)
+
+final_string = "Available Vulnerabilities:" + char(10) + exploits.join(char(10))
+
+get_shell.host_computer.File("/home/guest/scanned_libs/" + target_metalib.lib_name + "_" + target_metalib.version).set_content(final_string)
